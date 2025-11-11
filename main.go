@@ -96,7 +96,7 @@ func initDatabase() (*gorm.DB, error) {
 
 	// Auto-migrate tables
 	log.Info("Running auto-migration")
-	if err := db.AutoMigrate(&ControllerMaster{}); err != nil {
+	if err := db.AutoMigrate(&ControllerMaster{}, &WiredDeviceObject{}, &WiredObjectRules{}); err != nil {
 		return nil, fmt.Errorf("failed to auto-migrate tables: %w", err)
 	}
 
