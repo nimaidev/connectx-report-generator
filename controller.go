@@ -21,49 +21,76 @@ type Login struct {
 
 func (appConfig AppConfig) StartGateWayOperation(db *gorm.DB) {
 	log.Info("Starting gateway operations")
+	for {
+		var controllers []ControllerMaster
 
-	var controllers []ControllerMaster
-
-	result := db.Find(&controllers)
-	if result.Error != nil {
-		if errors.Is(result.Error, gorm.ErrRecordNotFound) {
-			log.Warn("No controllers found in database")
-		} else {
-			log.WithError(result.Error).Error("Failed to fetch controllers")
+		result := db.Find(&controllers)
+		if result.Error != nil {
+			if errors.Is(result.Error, gorm.ErrRecordNotFound) {
+				log.Warn("No controllers found in database")
+			} else {
+				log.WithError(result.Error).Error("Failed to fetch controllers")
+			}
+			return
 		}
-		return
+		log.WithFields(logrus.Fields{
+			"count": len(controllers),
+		}).Info("Controllers fetched successfully")
+
+		for _, controller := range controllers {
+			appConfig.performAuthOperationIfRequired(controller, db)
+			appConfig.sendHeartBeatIfRequired(controller, db)
+		}
+		// sleep for 30s
+		time.Sleep(30 * time.Second)
+	}
+}
+
+func (appConfig AppConfig) sendHeartBeatIfRequired(controller ControllerMaster, db *gorm.DB) {
+	timeNow := time.Now()
+	shouldSendHeartBeat := false
+	if controller.LastHeartBeat.IsZero() {
+		shouldSendHeartBeat = true
+	} else if timeNow.Sub(controller.LastHeartBeat) > 1*time.Minute {
+		shouldSendHeartBeat = true
+	}
+	if shouldSendHeartBeat {
+		controller.LastHeartBeat = timeNow
+		appConfig.sendHeartBeat(controller)
+		appConfig.saveControllerData(controller, db)
+	}
+}
+
+func (appConfig AppConfig) sendHeartBeat(controller ControllerMaster) {
+
+}
+
+func (appConfig AppConfig) performAuthOperationIfRequired(controller ControllerMaster, db *gorm.DB) {
+
+	if controller.Password == "" {
+		password, err := appConfig.GetSecretKey(controller.MacAddress)
+		if err != nil {
+			log.Errorf("Error: %v", err)
+		}
+		controller.Password = password
+		err = appConfig.saveControllerData(controller, db)
+		if err != nil {
+			log.Errorf("Error: %v", err)
+		}
 	}
 
-	log.WithFields(logrus.Fields{
-		"count": len(controllers),
-	}).Info("Controllers fetched successfully")
-
-	for _, controller := range controllers {
-		if controller.Password == "" {
-			password, err := appConfig.GetSecretKey(controller.MacAddress)
-			if err != nil {
-				log.Errorf("Error: %v", err)
-			}
-			controller.Password = password
-			err = appConfig.saveControllerData(controller, db)
-			if err != nil {
-				log.Errorf("Error: %v", err)
-			}
+	if controller.Token == "" {
+		token, err := appConfig.loginGateway(controller.MacAddress, controller.Token)
+		if err != nil {
+			log.Errorf("Error : %v", err)
 		}
-
-		if controller.Token == "" {
-			token, err := appConfig.loginGateway(controller.MacAddress, controller.Token)
-			if err != nil {
-				log.Errorf("Error : %v", err)
-			}
-			controller.Token = token
-			err = appConfig.saveControllerData(controller, db)
-			if err != nil {
-				log.Errorf("Error: %v", err)
-			}
+		controller.Token = token
+		err = appConfig.saveControllerData(controller, db)
+		if err != nil {
+			log.Errorf("Error: %v", err)
 		}
-
 	}
+
 }
 
 func (appConfig AppConfig) saveControllerData(controller ControllerMaster, db *gorm.DB) error {
