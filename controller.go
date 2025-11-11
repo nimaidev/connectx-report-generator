@@ -39,47 +39,41 @@ func (appConfig AppConfig) StartGateWayOperation(db *gorm.DB) {
 	}).Info("Controllers fetched successfully")
 
 	for _, controller := range controllers {
-		token := appConfig.checkGetKey(controller)
-		if token != "" {
-			controller.Token = token
-			// Save the updated controller with token
-			if err := db.Save(&controller).Error; err != nil {
-				log.WithError(err).WithField("controller_name", controller.ControllerName).Error("Failed to save controller token")
-			} else {
-				log.WithField("controller_name", controller.ControllerName).Info("Controller token saved successfully")
+		if controller.Password == "" {
+			password, err := appConfig.GetSecretKey(controller.MacAddress)
+			if err != nil {
+				log.Errorf("Error: %v", err)
+			}
+			controller.Password = password
+			err = appConfig.saveControllerData(controller, db)
+			if err != nil {
+				log.Errorf("Error: %v", err)
 			}
 		}
+
+		if controller.Token == "" {
+			token, err := appConfig.loginGateway(controller.MacAddress, controller.Token)
+			if err != nil {
+				log.Errorf("Error : %v", err)
+			}
+			controller.Token = token
+			err = appConfig.saveControllerData(controller, db)
+			if err != nil {
+				log.Errorf("Error: %v", err)
+			}
+		}
+
 	}
 }
 
-func (appConfig AppConfig) checkGetKey(controller ControllerMaster) string {
-	log.WithFields(logrus.Fields{
-		"controller_name": controller.ControllerName,
-	}).Info("Processing controller")
-	flag := false
-	if controller.Password == "" {
-		key, err := appConfig.GetSecretKey(controller.MacAddress)
-		if err != nil {
-			log.Errorf("Error while getting key %v", err)
-		} else {
-			controller.Password = key
-			flag = true
-		}
+func (appConfig AppConfig) saveControllerData(controller ControllerMaster, db *gorm.DB) error {
+	if err := db.Save(&controller).Error; err != nil {
+		log.WithError(err).WithField("controller_name", controller.ControllerName).Error("Failed to save controller token")
+		return err
 	} else {
-		flag = true
+		log.WithField("controller_name", controller.ControllerName).Info("Controller token saved successfully")
+		return nil
 	}
-	if flag {
-		if controller.Token == "" {
-			log.Info("Token is not there for ", controller.ControllerName, " getting it")
-			token, err := appConfig.loginGateway(controller.MacAddress, controller.Password)
-			if err != nil {
-				log.Error(err)
-			}
-			return token
-		}
-	}
-
-	return ""
 }
 
 func (appConfig AppConfig) GetSecretKey(macAddress string) (string, error) {
@@ -113,15 +107,18 @@ func (appConfig AppConfig) GetSecretKey(macAddress string) (string, error) {
 
 	// Extract token from nested structure
 	var parsed map[string]interface{}
+	if err := json.Unmarshal(resBody, &parsed); err != nil {
+		return "", fmt.Errorf("failed to parse JSON: %v", err)
+	}
 	if success, ok := parsed["success"].(map[string]interface{}); ok {
 		if data, ok := success["data"].(map[string]interface{}); ok {
-			if token, ok := data["Token"].(string); ok {
-				return token, nil
+			if secretKey, ok := data["secretKey"].(string); ok {
+				return secretKey, nil
 			}
 		}
 	}
 
-	return "", fmt.Errorf("token not found in response")
+	return "", fmt.Errorf("secretKey not found in response")
 }
 
 func (appConfig AppConfig) loginGateway(macAddress string, password string) (string, error) {
