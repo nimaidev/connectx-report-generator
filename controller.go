@@ -56,13 +56,11 @@ func (appConfig AppConfig) sendHeartBeatIfRequired(controller ControllerMaster, 
 	}
 	if shouldSendHeartBeat {
 		controller.LastHeartBeat = timeNow
-		appConfig.sendHeartBeat(controller)
-		appConfig.saveControllerData(controller, db)
+		isSuccess := appConfig.sendHeartBeat(controller, db)
+		if isSuccess {
+			appConfig.saveControllerData(controller, db)
+		}
 	}
-}
-
-func (appConfig AppConfig) sendHeartBeat(controller ControllerMaster) {
-
 }
 
 func (appConfig AppConfig) performAuthOperationIfRequired(controller ControllerMaster, db *gorm.DB) {
@@ -98,11 +96,47 @@ func (appConfig AppConfig) saveControllerData(controller ControllerMaster, db *g
 		log.WithError(err).WithField("controller_name", controller.ControllerName).Error("Failed to save controller token")
 		return err
 	} else {
-		log.WithField("controller_name", controller.ControllerName).Info("Controller token saved successfully")
+		log.WithField("controller_name", controller.ControllerName).Info("Controller details saved successfully")
 		return nil
 	}
 }
 
+func (appConfig AppConfig) sendHeartBeat(controller ControllerMaster, db *gorm.DB) bool {
+	url := fmt.Sprintf("%s/api/gms/sync/v1/to-controller", appConfig.ServerUrl)
+	log.Info("URL for heartbeat: ", url)
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		log.Error("Error: ", err)
+		return false
+	}
+	req.Header.Set("Authorization", "Bearer "+controller.Token)
+	req.Header.Set("seqId", "-1")
+	req.Header.Set("isRebooted", "false")
+
+	res, err := GetHttpClient().Do(req)
+	if err != nil {
+		log.Errorf("HTTP Error : %v", err)
+	}
+
+	if res.StatusCode == http.StatusUnauthorized {
+		log.Error("Gateway got logged out")
+		return false
+	}
+
+	if res.StatusCode == http.StatusOK {
+		log.Info("Heartbeat for " + controller.MacAddress + " sent successfully")
+		return true
+	}
+
+	//read the response for debug
+	resBody, err := io.ReadAll(res.Body)
+	if err != nil {
+		log.Errorf("failed to read response: %v", err)
+	}
+	log.WithField("response", string(resBody)).Info("Got the response")
+	return false
+
+}
 func (appConfig AppConfig) GetSecretKey(macAddress string) (string, error) {
 	url := fmt.Sprintf("%s/api/iqnext/controller/v1/nc/getSecretKey/%s", appConfig.ServerUrl, macAddress)
 	log.Info("URL for get Key : ", url)
