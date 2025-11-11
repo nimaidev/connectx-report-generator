@@ -120,6 +120,8 @@ func (appConfig AppConfig) sendHeartBeat(controller ControllerMaster, db *gorm.D
 
 	if res.StatusCode == http.StatusUnauthorized {
 		log.Error("Gateway got logged out")
+		controller.Token = ""
+		appConfig.performAuthOperationIfRequired(controller, db)
 		return false
 	}
 
