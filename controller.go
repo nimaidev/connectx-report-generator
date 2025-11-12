@@ -66,14 +66,62 @@ func (appConfig AppConfig) sendHeartBeatIfRequired(controller ControllerMaster, 
 func (appConfig AppConfig) performAuthOperationIfRequired(controller ControllerMaster, db *gorm.DB) {
 
 	if controller.Password == "" {
-		password, err := appConfig.GetSecretKey(controller.MacAddress)
-		if err != nil {
-			log.Errorf("Error: %v", err)
+		log.Info("Getting secret key for: " + controller.MacAddress)
+
+		// Retry until we get a valid secret key
+		var password string
+		var err error
+		maxRetries := 10
+		retryDelay := 5 * time.Second
+
+		for attempt := 1; attempt <= maxRetries; attempt++ {
+			log.WithFields(logrus.Fields{
+				"attempt":     attempt,
+				"mac_address": controller.MacAddress,
+			}).Info("Attempting to get secret key")
+
+			password, err = appConfig.GetSecretKey(controller.MacAddress)
+			if err != nil {
+				log.WithFields(logrus.Fields{
+					"attempt":     attempt,
+					"error":       err,
+					"mac_address": controller.MacAddress,
+				}).Warn("Failed to get secret key, retrying...")
+
+				if attempt < maxRetries {
+					time.Sleep(retryDelay)
+				}
+				continue
+			}
+
+			if password != "" {
+				log.WithFields(logrus.Fields{
+					"attempt":     attempt,
+					"mac_address": controller.MacAddress,
+				}).Info("Secret key retrieved successfully")
+				break
+			} else {
+				log.WithFields(logrus.Fields{
+					"attempt":     attempt,
+					"mac_address": controller.MacAddress,
+				}).Warn("Empty secret key received, retrying...")
+
+				if attempt < maxRetries {
+					time.Sleep(retryDelay)
+				}
+			}
 		}
+
+		if password == "" {
+			log.WithField("mac_address", controller.MacAddress).Error("Failed to get secret key after all retries")
+			return
+		}
+
+		// Save the password once we have it
 		controller.Password = password
 		err = appConfig.saveControllerData(controller, db)
 		if err != nil {
-			log.Errorf("Error: %v", err)
+			log.Errorf("Error saving controller data: %v", err)
 		}
 	}
 
