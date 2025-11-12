@@ -4,6 +4,7 @@ import "time"
 
 type WiredDeviceObject struct {
 	Id               uint32    `gorm:"primaryKey" json:"id"`
+	OrgId            int8      `json:"orgId"`
 	DeviceId         uint32    `json:"deviceId"`
 	DeviceName       string    `json:"deviceName"`
 	ObjectId         uint32    `json:"objectId"`
