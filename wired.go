@@ -1,6 +1,12 @@
 package main
 
-import "time"
+import (
+	"errors"
+	"time"
+
+	"github.com/sirupsen/logrus"
+	"gorm.io/gorm"
+)
 
 type WiredDeviceObject struct {
 	Id               uint32    `gorm:"primaryKey" json:"id"`
@@ -25,4 +31,18 @@ type WiredObjectRules struct {
 	ParamId      int16   `json:"paramId"`
 	ParamName    string  `json:"paramName"`
 	IsContinuous bool    `json:"isContinuous"`
+}
+
+func (appConfig AppConfig) StartReportGenerationForController(controller ControllerMaster, db *gorm.DB) {
+	var wiredDeviceObjectList []WiredDeviceObject
+	result := db.Where("controller_id = ?", controller.ControllerId).Find(&wiredDeviceObjectList)
+	if result.Error != nil {
+		if errors.Is(result.Error, gorm.ErrRecordNotFound) {
+			log.Warn("No controllers found in database")
+		} else {
+			log.WithError(result.Error).Error("Failed to fetch controllers")
+		}
+		return
+	}
+	log.WithFields(logrus.Fields{"count": len(wiredDeviceObjectList), "controller": controller.MacAddress}).Info("Retrieved wired device objects for controller: ")
 }

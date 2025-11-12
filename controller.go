@@ -40,6 +40,8 @@ func (appConfig AppConfig) StartGateWayOperation(db *gorm.DB) {
 		for _, controller := range controllers {
 			appConfig.performAuthOperationIfRequired(controller, db)
 			appConfig.sendHeartBeatIfRequired(controller, db)
+			//Start in a different thread
+			go appConfig.StartReportGenerationForController(controller, db)
 		}
 		// sleep for 30s
 		time.Sleep(30 * time.Second)

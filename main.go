@@ -25,6 +25,7 @@ type AppConfig struct {
 
 type ControllerMaster struct {
 	Id             int16     `gorm:"primarykey" json:"id"`
+	ControllerId   int8      `json:"controllerId"`
 	OrgId          int       `json:"orgId"`
 	ControllerName string    `json:"controllerName"`
 	MacAddress     string    `json:"macAddress"`
