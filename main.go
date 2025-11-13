@@ -21,6 +21,7 @@ type AppConfig struct {
 	MySqlUser string
 	MySqlPass string
 	ServerUrl string
+	Token     string
 }
 
 type ControllerMaster struct {
