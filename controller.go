@@ -21,31 +21,31 @@ type Login struct {
 
 func (appConfig AppConfig) StartGateWayOperation(db *gorm.DB) {
 	log.Info("Starting gateway operations")
-	for {
-		var controllers []ControllerMaster
+	// for {
+	var controllers []ControllerMaster
 
-		result := db.Find(&controllers)
-		if result.Error != nil {
-			if errors.Is(result.Error, gorm.ErrRecordNotFound) {
-				log.Warn("No controllers found in database")
-			} else {
-				log.WithError(result.Error).Error("Failed to fetch controllers")
-			}
-			return
+	result := db.Find(&controllers)
+	if result.Error != nil {
+		if errors.Is(result.Error, gorm.ErrRecordNotFound) {
+			log.Warn("No controllers found in database")
+		} else {
+			log.WithError(result.Error).Error("Failed to fetch controllers")
 		}
-		log.WithFields(logrus.Fields{
-			"count": len(controllers),
-		}).Info("Controllers fetched successfully")
-
-		for _, controller := range controllers {
-			appConfig.performAuthOperationIfRequired(controller, db)
-			appConfig.sendHeartBeatIfRequired(controller, db)
-			//Start in a different thread
-			go appConfig.StartReportGenerationForController(controller, db)
-		}
-		// sleep for 30s
-		time.Sleep(30 * time.Second)
+		return
 	}
+	log.WithFields(logrus.Fields{
+		"count": len(controllers),
+	}).Info("Controllers fetched successfully")
+
+	for _, controller := range controllers {
+		appConfig.performAuthOperationIfRequired(controller, db)
+		appConfig.sendHeartBeatIfRequired(controller, db)
+		//Start in a different thread
+		go appConfig.StartReportGenerationForController(controller, db)
+	}
+	// sleep for 30s
+	// time.Sleep(30 * time.Second)
+	// }
 }
 
 func (appConfig AppConfig) sendHeartBeatIfRequired(controller ControllerMaster, db *gorm.DB) {

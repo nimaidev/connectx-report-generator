@@ -2,6 +2,7 @@ package main
 
 import (
 	"errors"
+	"math/rand/v2"
 	"time"
 
 	"github.com/sirupsen/logrus"
@@ -33,6 +34,28 @@ type WiredObjectRules struct {
 	IsContinuous bool    `json:"isContinuous"`
 }
 
+var objectRulesMap = make(map[int16]WiredObjectRules)
+
+func (appConfig AppConfig) LoadObjectRules(db *gorm.DB) {
+	var objectRulesList []WiredObjectRules
+	result := db.Find(&objectRulesList)
+	if result.Error != nil {
+		if errors.Is(result.Error, gorm.ErrRecordNotFound) {
+			log.Info("Seems like no rules are present in DB")
+		} else {
+			log.Errorf("Error; %v", result.Error)
+		}
+	}
+	log.WithFields(logrus.Fields{"rulesCount": len(objectRulesList)}).Info("Found rules details")
+	if len(objectRulesList) > 0 {
+
+		for _, rule := range objectRulesList {
+			objectRulesMap[rule.ParamId] = rule
+		}
+		log.Info("Rules Loaded to cache successfully")
+	}
+}
+
 func (appConfig AppConfig) StartReportGenerationForController(controller ControllerMaster, db *gorm.DB) {
 	var wiredDeviceObjectList []WiredDeviceObject
 	result := db.Where("controller_id = ?", controller.ControllerId).Find(&wiredDeviceObjectList)
@@ -45,4 +68,46 @@ func (appConfig AppConfig) StartReportGenerationForController(controller Control
 		return
 	}
 	log.WithFields(logrus.Fields{"count": len(wiredDeviceObjectList), "controller": controller.MacAddress}).Info("Retrieved wired device objects for controller: ")
+	for _, object := range wiredDeviceObjectList {
+		objectCopy := object // Create a copy to avoid closure issues
+		log.Info("Starting to generate report for : " + objectCopy.ObjectName)
+		go appConfig.startSendingReportForObject(objectCopy, db)
+	}
+}
+
+func (appConfig AppConfig) startSendingReportForObject(object WiredDeviceObject, db *gorm.DB) {
+	lastValue := object.ReportValue
+	for {
+		objectRule := objectRulesMap[object.IqnextObjectType]
+		if objectRule.IsContinuous {
+			// take the last value add the constant and send
+			if objectRule.Constant == 0.0 {
+				// get a random value between 1
+				objectRule.Constant = rand.Float32()
+			}
+			object.ReportValue = lastValue + objectRule.Constant
+			lastValue = object.ReportValue
+			log.WithFields(logrus.Fields{"ObjectName": object.ObjectName, "objectValue": lastValue}).Info("Generated value")
+		} else {
+			// Generate a value between max and min
+			minVal := objectRule.MinValue
+			maxVal := objectRule.MaxValue
+			randomValue := minVal + rand.Float32()*(maxVal-minVal)
+			object.ReportValue = randomValue
+			lastValue = object.ReportValue
+			log.WithFields(logrus.Fields{
+				"ObjectName":  object.ObjectName,
+				"objectValue": randomValue,
+				"minValue":    minVal,
+				"maxValue":    maxVal,
+			}).Info("Generated random value between min-max")
+		}
+		// / Update the object in database
+
+		if err := db.Save(&object); err.Error != nil {
+			log.WithError(err.Error).Error("Failed to save object report value")
+		}
+		//sleep for 10 sec
+		time.Sleep(10 * time.Second)
+	}
 }

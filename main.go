@@ -120,6 +120,7 @@ func main() {
 	if err != nil {
 		log.WithError(err).Fatal("Failed to initialize database")
 	}
+	config.LoadObjectRules(db)
 
 	go config.StartGateWayOperation(db)
 
