@@ -2,8 +2,6 @@ package main
 
 import (
 	"bytes"
-	"encoding/base64"
-	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -47,36 +45,6 @@ const (
 	FLOAT
 	STRING
 )
-
-type TagVO struct {
-	CommandId int
-	buffer    bytes.Buffer
-}
-
-func (t *TagVO) AddByteValue(tag int, value byte) {
-	t.buffer.WriteByte(byte(tag))
-	t.buffer.WriteByte(value)
-}
-
-func (t *TagVO) AddIntValue(tag int, value int) {
-	t.buffer.WriteByte(byte(tag))
-	binary.Write(&t.buffer, binary.BigEndian, int32(value))
-}
-
-func (t *TagVO) AddFloatValue(tag int, value float32) {
-	t.buffer.WriteByte(byte(tag))
-	binary.Write(&t.buffer, binary.BigEndian, value)
-}
-
-func (t *TagVO) AddStringValue(tag int, value string) {
-	t.buffer.WriteByte(byte(tag))
-	t.buffer.Write([]byte(value))
-}
-
-// createRequestMessage returns the byte array for the message
-func (t *TagVO) CreateRequestMessage() []byte {
-	return t.buffer.Bytes()
-}
 
 var objectRulesMap = make(map[int16]WiredObjectRules)
 
@@ -132,22 +100,23 @@ func (appConfig AppConfig) startSendingReportForObject(token string, object Wire
 			object.ReportValue = lastValue + objectRule.Constant
 			lastValue = object.ReportValue
 			log.WithFields(logrus.Fields{"ObjectName": object.ObjectName, "objectValue": lastValue}).Info("Generated value")
-		} else {
-			// Generate a value between max and min
-			minVal := objectRule.MinValue
-			maxVal := objectRule.MaxValue
-			randomValue := minVal + rand.Float32()*(maxVal-minVal)
-			object.ReportValue = randomValue
-			lastValue = object.ReportValue
-			log.WithFields(logrus.Fields{
-				"ObjectName":  object.ObjectName,
-				"objectValue": randomValue,
-				"minValue":    minVal,
-				"maxValue":    maxVal,
-			}).Info("Generated random value between min-max")
 		}
+		// else {
+		// 	// Generate a value between max and min
+		// 	minVal := objectRule.MinValue
+		// 	maxVal := objectRule.MaxValue
+		// 	randomValue := minVal + rand.Float32()*(maxVal-minVal)
+		// 	object.ReportValue = randomValue
+		// 	lastValue = object.ReportValue
+		// 	log.WithFields(logrus.Fields{
+		// 		"ObjectName":  object.ObjectName,
+		// 		"objectValue": randomValue,
+		// 		"minValue":    minVal,
+		// 		"maxValue":    maxVal,
+		// 	}).Info("Generated random value between min-max")
+		// }
 		// / Update the object in database
-		appConfig.sendReportToController(token, object)
+		appConfig.sendReportToController(token, object, 1)
 		if err := db.Save(&object); err.Error != nil {
 			log.WithError(err.Error).Error("Failed to save object report value")
 		}
@@ -156,7 +125,7 @@ func (appConfig AppConfig) startSendingReportForObject(token string, object Wire
 	}
 }
 
-func (appConfig AppConfig) sendReportToController(token string, object WiredDeviceObject) error {
+func (appConfig AppConfig) sendReportToController(token string, object WiredDeviceObject, reportFor int) error {
 	data := &TagVO{CommandId: 1}
 
 	// TAG 1: Bacnet report type
@@ -171,7 +140,7 @@ func (appConfig AppConfig) sendReportToController(token string, object WiredDevi
 		case BYTE:
 			data.AddByteValue(3, byte(object.ReportValue))
 		case INTEGER:
-			data.AddIntValue(3, int(object.ReportValue))
+			data.AddIntValue(3, int32(object.ReportValue))
 		case FLOAT:
 			data.AddFloatValue(3, object.ReportValue)
 		case STRING:
@@ -180,22 +149,29 @@ func (appConfig AppConfig) sendReportToController(token string, object WiredDevi
 	}
 
 	// TAG 4: objectId
-	data.AddIntValue(4, int(object.ObjectId))
+	data.AddIntValue(4, int32(object.ObjectId))
 
 	// TAG 5: timestamp
-	data.AddIntValue(5, int(time.Now().Unix()))
+	data.AddIntValue(5, int32(time.Now().Unix()))
 
-	var output bytes.Buffer
-	output.Write(data.CreateRequestMessage())
+	reportData := data.CreateRequestMessage()
 
-	//Prepare the payload
-	var payload = make(map[int]bytes.Buffer)
-	payload[1] = output
-	encodedData := base64.StdEncoding.EncodeToString(output.Bytes())
+	// Convert bytes to array of integers
+	intArray := make([]int, len(reportData))
+	for i, b := range reportData {
+		intArray[i] = int(b)
+	}
+
+	log.Info(intArray)
+
+	// Create map where key = reportFor, value = byte array
+	dataArray := make(map[int][]int)
+	dataArray[reportFor] = intArray
+
 	payloadForm := map[string]interface{}{
-		"isRebooted":         "false",
+		"isRebooted":         false,
 		"uplinkSeqId":        -1,
-		"dataFromController": []string{encodedData},
+		"dataFromController": dataArray,
 	}
 
 	body, err := json.Marshal(payloadForm)
@@ -203,33 +179,36 @@ func (appConfig AppConfig) sendReportToController(token string, object WiredDevi
 		return fmt.Errorf("failed to create request: %v", err)
 	}
 
-	//Send data to cloud
+	log.Info("Sending payload: ", string(body))
+
 	url := fmt.Sprintf("%s/api/gms/sync/v1/from-controller", appConfig.ServerUrl)
 	log.Info("URL for heartbeat: ", url)
+
 	req, err := http.NewRequest("POST", url, bytes.NewBuffer(body))
 	if err != nil {
 		return fmt.Errorf("error: %v", err)
 	}
-	// Note: controller variable is not defined in this function scope
-	// You may need to pass it as a parameter or define it differently
+
 	req.Header.Set("Content-Type", "application/json; charset=UTF-8")
 	req.Header.Set("Authorization", "Bearer "+token)
 
 	res, err := GetHttpClient().Do(req)
 	if err != nil {
-		log.Errorf("HTTP Error : %v", err)
+		return fmt.Errorf("HTTP Error: %v", err)
 	}
+	defer res.Body.Close()
+
+	log.Infof("Response status: %d", res.StatusCode)
 
 	if res.StatusCode == http.StatusUnauthorized {
 		return fmt.Errorf("gateway got logged out")
-
 	}
 
-	//read the response for debug
 	resBody, err := io.ReadAll(res.Body)
 	if err != nil {
 		log.Errorf("failed to read response: %v", err)
 	}
 	log.WithField("response", string(resBody)).Info("Got the response")
+
 	return nil
 }
